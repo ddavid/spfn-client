@@ -24,13 +24,16 @@
 #
 ###############################################################################
 
-import random
 from os import environ
+import numpy as np
+import pypcd
 
 import asyncio
 from autobahn.wamp.types import SubscribeOptions
 from autobahn.asyncio.wamp import ApplicationSession, ApplicationRunner
 
+
+#TODO import? SPFN
 
 class Component(ApplicationSession):
     """
@@ -41,18 +44,31 @@ class Component(ApplicationSession):
     async def onJoin(self, details):
         self.received = 0
 
-        def on_heartbeat(details=None):
-            print("Got heartbeat (publication ID {})".format(details.publication))
+        def on_heartbeat(counter, details=None):
+            print("Got heartbeat: {} (publication ID {})".format(counter, details.publication))
 
         await self.subscribe(on_heartbeat, u'com.myapp.heartbeat', options=SubscribeOptions(details_arg='details'))
 
-        def on_topic2(a, b, c=None, d=None):
-            print("Got event: {} {} {} {}".format(a, b, c, d))
+        # Calls self.leave after going through event loop five times
+        #asyncio.get_event_loop().call_later(5, self.leave)
 
-        await self.subscribe(on_topic2, u'com.myapp.topic2')
-        asyncio.get_event_loop().call_later(5, self.leave)
+        def on_pointcloud_received(t, pcd_pointcloud):
+            print("[EVENT] Received PointCloud from timestamp: {}".format(t))
+            xyz_pointcloud = np.zeros(pcd_pointcloud.dims)
+            # Do further stuff with PointCloud
+
+            #TODO Convert PointCloud from `.pcd to .xyz`
+            self.publish(u'com.myapp.spfn.input', xyz_pointcloud)
+
+        def on_spfn_input_received(xyz_pointcloud):
+            #TODO Do SPFN prediction
+            #TODO publish SPFN prediction
+            # self.publish(u'com.myapp.spfn.predictions', predicted_geometries)
+
+        await self.subscribe(on_pointcloud_received, u'com.myapp.zenfone.pointclouds')
 
     def onDisconnect(self):
+        print("Disconnecting from crossbar router")
         asyncio.get_event_loop().stop()
 
 
@@ -64,4 +80,3 @@ if __name__ == '__main__':
     realm = u"crossbardemo"
     runner = ApplicationRunner(url, realm)
     runner.run(Component)
-

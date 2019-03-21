@@ -24,38 +24,12 @@
 #
 ###############################################################################
 
-from os import environ
+import hdf5
+import json
 
-import asyncio
-from autobahn.wamp.types import SubscribeOptions
-from autobahn.asyncio.wamp import ApplicationSession, ApplicationRunner
+def prediction_to_json(spfn_prediction):
+
+    json_prediction = json.loads()
 
 
-class Component(ApplicationSession):
-    """
-    An application component that publishes events with no payload and
-    with complex payloads every second.
-    """
-
-    async def onJoin(self, details):
-        running = True
-        counter = 0
-
-        #self.publish(u'com.myapp.spfn.predictions', pc)
-
-        while running:
-            print("publish: com.myapp.heartbeat")
-            self.publish(u'com.myapp.heartbeat', counter)
-
-            counter += 1
-            await asyncio.sleep(1)
-
-if __name__ == '__main__':
-    import six
-    url = environ.get("AUTOBAHN_DEMO_ROUTER", u"ws://127.0.0.1:8080/ws")
-    if six.PY2 and type(url) == six.binary_type:
-        url = url.decode('utf8')
-    realm = u"crossbardemo"
-    runner = ApplicationRunner(url, realm)
-    runner.run(Component)
-
+    return json_prediction
