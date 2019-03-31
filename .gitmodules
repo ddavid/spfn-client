@@ -1,0 +1,3 @@
+[submodule "SPFN"]
+	path = SPFN
+	url = git@github.com:ddavid/SPFN.git
