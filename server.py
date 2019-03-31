@@ -12,7 +12,8 @@ import numpy as np
 
 import argparse
 
-import train
+from train import SPFN
+
 
 class SPFNServer(object):
     def __init__(self, ip_address="127.0.0.1", port=4445, queue_length=10):
@@ -25,6 +26,8 @@ class SPFNServer(object):
         self.skt = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.skt.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
+        self.spfn = SPFN()
+
         # Bind the socket to the port
         server_address = (ip_address, port)
         print('starting up on {} port {}'.format(*server_address))
@@ -33,12 +36,20 @@ class SPFNServer(object):
     def pcl_consumer(self):
         self.condition.acquire()
         while True:
-            while self.queue:
+            if self.queue:
                 pcl = self.queue.popleft()
                 self.condition.release()
                 ## Predict using SPFN
+                bytes_pred_json = self.spfn.predict_single_pcl(pcl)
+                # Need a dictionary for connections?
+                #TODO Need to differentiate somehow between PCL client and UE4 client
+                self.skt.sendto(bytes_pred_json, self.connections[1])
 
                 self.condition.acquire()
+                # Get rid of items in queue to always have newest
+                # Is this necessary with max_length?
+            while self.queue:
+                self.queue.popleft()
             self.condition.wait()
 
     def pcl_publisher(self, pcl):
@@ -53,7 +64,7 @@ class SPFNServer(object):
             data = connection.recv(8)
             if data:
                 # Check endianess of PC with: `lscpu | grep "Byte Order"`
-                #TODO Check befor Demo!!!
+                #TODO Check before Demo!!!
                 pcl_size = int.from_bytes(data, byteorder='little')
                 print('Received pcl of size: {!r}'.format(pcl_size))
                 pcl = np.array([])
@@ -66,7 +77,8 @@ class SPFNServer(object):
 
                     np.append(pcl, np.array([x, y, z]))
 
-                # Do stuff with PCL using SPFN
+                # Publish PCL by appending to queue
+                threading.Thread(target=self.pcl_publisher, args=pcl, name="Zenfone: PCL publisher").start()
                 # SPFN output still has to be converted to JSON? to more easily be imported in UE4
                 print('PCL saved')
             else:
@@ -74,9 +86,11 @@ class SPFNServer(object):
                 break
 
     def run(self):
+        # Start PCL Consumer/SPFN thread
+        threading.Thread(target=self.pcl_consumer, name='SPFN: PCL Consumer').start()
+
         # Listen for incoming connections
         self.skt.listen(1)
-
         while True:
             # Wait for a connection
             print('waiting for a connection')
