@@ -1,59 +1,104 @@
+import os, sys
+
+BASE_DIR = os.path.dirname(__file__)
+sys.path.append(os.path.join(BASE_DIR, 'SPFN/spfn'))
+
+import collections
 import socket
-import sys
 import struct
-import subprocess
+import _thread
+import threading
+import numpy as np
 
-def main():
+import argparse
 
-  # Create a TCP/IP socket
-  sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+import train
 
-  # Bind the socket to the port
-  server_address = ('127.0.0.1', 4445)
-  print('starting up on {} port {}'.format(*server_address))
-  sock.bind(server_address)
+class SPFNServer(object):
+    def __init__(self, ip_address="127.0.0.1", port=4445, queue_length=10):
+        self.queue = collections.deque
+        self.queue.maxlen = queue_length
+        self.condition = threading.Condition()
+        self.connections = []
 
-  # Start PCLServer
-  #subprocess.call("/home/ddodel/Documents/github-repos/PCLServer/build/server")
+        # Create a TCP/IP socket
+        self.skt = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.skt.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-  # Listen for incoming connections
-  sock.listen(1)
+        # Bind the socket to the port
+        server_address = (ip_address, port)
+        print('starting up on {} port {}'.format(*server_address))
+        self.skt.bind(server_address)
 
-  while True:
-    # Wait for a connection
-    print('waiting for a connection')
-    connection, client_address = sock.accept()
-    try:
-        print('connection from', client_address)
+    def pcl_consumer(self):
+        self.condition.acquire()
+        while True:
+            while self.queue:
+                pcl = self.queue.popleft()
+                self.condition.release()
+                ## Predict using SPFN
 
-        # Receive the data in small chunks and retransmit it
+                self.condition.acquire()
+            self.condition.wait()
+
+    def pcl_publisher(self, pcl):
+        with self.condition:
+            self.queue.append(pcl)
+            self.condition.notify()
+
+    # Unterscheidung zwischen PCL Client und UE4 client nötig
+    def on_new_client(self, connection, client_address):
         while True:
             # Receive the size of the PCL (size_t)
             data = connection.recv(8)
             if data:
-              # Check endianess of PC with: `lscpu | grep "Byte Order"`
-              pcl_size = int.from_bytes(data, byteorder='little')
-              print('Received pcl of size: {!r}'.format(pcl_size))
-              
+                # Check endianess of PC with: `lscpu | grep "Byte Order"`
+                #TODO Check befor Demo!!!
+                pcl_size = int.from_bytes(data, byteorder='little')
+                print('Received pcl of size: {!r}'.format(pcl_size))
+                pcl = np.array([])
 
-              for i_pt in range(0, pcl_size):
-                #print(i_pt)
-                # Receive single points, represented by floats
-                x = struct.unpack('f', connection.recv(4))
-                y = struct.unpack('f', connection.recv(4))
-                z = struct.unpack('f', connection.recv(4))
+                for i_pt in range(0, pcl_size):
+                    # Receive single points, represented by floats
+                    x = struct.unpack('f', connection.recv(4))
+                    y = struct.unpack('f', connection.recv(4))
+                    z = struct.unpack('f', connection.recv(4))
 
-                #print((x, y, z))
-              # Do stuff with PCL using SPFN
-              # SPFN output still has to be converted to JSON? to more easily be imported in UE4
-              print('PCL saved')
+                    np.append(pcl, np.array([x, y, z]))
+
+                # Do stuff with PCL using SPFN
+                # SPFN output still has to be converted to JSON? to more easily be imported in UE4
+                print('PCL saved')
             else:
                 print('no data from', client_address)
                 break
 
-    finally:
-        # Clean up the connection
-        connection.close()
+    def run(self):
+        # Listen for incoming connections
+        self.skt.listen(1)
+
+        while True:
+            # Wait for a connection
+            print('waiting for a connection')
+            connection, client_address = self.skt.accept()
+            self.connections.append((connection, client_address))
+            try:
+                _thread.start_new_thread(self.on_new_client, (connection, client_address))
+                print('connection from', client_address)
+
+            finally:
+                # Clean up the connections
+                for client_address in self.connections:
+                    print('Closing connection with {} on port {}'.format(*client_address))
+                    client_address[0].close()
+
 
 if __name__ == '__main__':
-  main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-ip", help="IP Address to start SPFN server on.")
+    parser.add_argument(["--port", "-p"], help="Port to bind SPFN Server to", type=int)
+    parser.add_argument(["-q", "--queue-length"], help="Length of PCL queue.")
+    args = parser.parse_args()
+
+    server = SPFNServer(args.ip, args.port, args.q)
+    server.run()

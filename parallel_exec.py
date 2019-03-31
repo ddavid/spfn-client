@@ -1,5 +1,4 @@
 from subprocess import Popen, PIPE
-import server
 
 def main():
   cmds_list  = [['/home/ddodel/miniconda3/bin/python', 'server.py'],['/home/ddodel/Documents/github-repos/PCLServer/build/server']]
