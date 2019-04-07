@@ -2,11 +2,11 @@
 # Editors
 .idea
 
-tests
+tests/
 __pycache__/
 
 #logs
-.log
+*.log
 
 #JSON
-.json
+*.json
