@@ -3,3 +3,10 @@
 .idea
 
 tests
+__pycache__/
+
+#logs
+.log
+
+#JSON
+.json
