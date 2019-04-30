@@ -1,4 +1,5 @@
 import os, sys, signal
+from socket import socket
 
 BASE_DIR = os.path.dirname(__file__)
 sys.path.append(os.path.join(BASE_DIR, 'SPFN/spfn'))
@@ -14,6 +15,8 @@ import numpy as np
 
 import argparse
 
+import server_utils
+
 from train import SPFN
 from signal_handler import ServerSignalHandler
 
@@ -21,9 +24,11 @@ from signal_handler import ServerSignalHandler
 class SPFNServer(object):
     def __init__(self, ip_address="127.0.0.1", port=4445, queue_length=10):
         self.queue = collections.deque([], queue_length)
-        print(self.queue.maxlen)
+        print('Starting with point cloud queue of size %i' % self.queue.maxlen)
         self.condition = threading.Condition()
         self.connections = []
+        self.connections_dict = {}
+        self.connection_count = 0
 
         # Create Signal Handler for eventual clean up
         self.sig_handler = ServerSignalHandler(self)
@@ -43,20 +48,42 @@ class SPFNServer(object):
         self.condition.acquire()
         while True:
             if self.queue:
+                ue_package = {}
+                pcl_ue_package = {}
                 pcl = self.queue.popleft()
                 print("Shape after popping from deque:", pcl.shape, sep=" ")
                 self.condition.release()
-                ## Predict using SPFN
-                bytes_pred_json = self.spfn.predict_single_pcl(pcl)
-                # Need a dictionary for connections?
-                #TODO Need to differentiate somehow between PCL client and UE4 client
-                # Working under the assumption that the UE4 Client will connect later than
-                self.skt.sendto(json.dumps(pcl.tolist()), self.connections[1]) # or send floats one by one
-                self.skt.sendto(bytes_pred_json, self.connections[1])
+                # Predict using SPFN
+                pred_json = self.spfn.predict_single_pcl(pcl)
+
+                # Create object with predicted pcl and prediction results
+                pcl_ue = json.dumps(server_utils.flatten_list(pcl.tolist()))
+
+                ue_package['point_cloud'] = pcl_ue
+                pcl_ue_package['point_cloud'] = pcl_ue
+                ue_package['pred_dict'] = pred_json
+
+                # bytes_pred_json = server_utils.dump_serialized_json_obj(ue_package, save_file='last_pred')
+                # test pcl only bytes --> Only garbled output in UE
+                # bytes_pred_json = server_utils.dump_serialized_json_obj(pcl_ue)
+                # test pcl only bytes --> Only garbled output in UE
+                # print(json.dumps(pcl_ue_package))
+                bytes_pred_json = server_utils.dump_serialized_json_obj(pcl_ue_package)
+                print('Size of bytes obj: %i' % len(bytes_pred_json))
+
+
+                # Working under the assumption that the UE4 Client will connect
+                # later than PCLServer and before first packet is sent
+
+                # Only send to UE client if we are connected to it
+                if 'ue_client' in self.connections_dict:
+                    print(self.connections_dict['ue_client'])
+                    connection, client_address = self.connections_dict['ue_client']
+                    connection.send(bytes_pred_json)
+                    #self.connections_dict['ue_client'].send(bytes_pred_json)
 
                 self.condition.acquire()
                 # Get rid of items in queue to always have newest
-                # Is this necessary with max_length?
             while self.queue:
                 self.queue.popleft()
             self.condition.wait()
@@ -92,8 +119,6 @@ class SPFNServer(object):
                 #print('Shape of PCL Numpy Array:' , pcl.shape, sep=" ")
                 # Publish PCL by appending to queue
                 threading.Thread(target=self.pcl_publisher, args=[pcl], name="Zenfone: PCL publisher").start()
-                # SPFN output still has to be converted to JSON? to more easily be imported in UE4
-                #print('PCL saved')
             else:
                 print('no data from', client_address)
                 break
@@ -107,20 +132,30 @@ class SPFNServer(object):
         while True:
             # Wait for a connection
             print('waiting for a connection')
-            connection, client_address = self.skt.accept()
-            self.connections.append((connection, client_address))
+            socket_tuple = self.skt.accept()
+            _, client_address = socket_tuple
+            #self.connections.append(socket_tuple)
+            # Testing simple Connection Dictionary
+            if self.connection_count is 0:
+                self.connections_dict['pcl_server'] = socket_tuple
+            elif self.connection_count is 1:
+                self.connections_dict['ue_client'] = socket_tuple
             try:
-                _thread.start_new_thread(self.on_new_client, (connection, client_address))
+                _thread.start_new_thread(self.on_new_client, socket_tuple)
             finally:
+                self.connection_count = self.connection_count + 1
                 print('connection from', client_address)
+                print('Connected to %i clients' % self.connection_count)
 
     def cleanup(self):
         # Clean up the connections
-        for client_address in self.connections:
-            print('Closing connection with {} on port {}'.format(*client_address))
-            client_address[0].close()
-        sys.exit(0)
-
+        try:
+            for key, (socket, address) in self.connections_dict.items():
+                print('Closing %s connection to' % key, end=' ')
+                print('Socket on {}:{}'.format(*address))
+                socket.close()
+        finally:
+            sys.exit(0)
 
 
 if __name__ == '__main__':
@@ -130,7 +165,7 @@ if __name__ == '__main__':
     parser.add_argument("--queue-length", help="Length of PCL queue.", type=int)
     args = parser.parse_args()
     # Check if called with arguments
-    if len(sys.argv) == 3:
+    if len(sys.argv) == 7:
         print("Got Arguments: Initializing SPFNServer")
         server = SPFNServer(args.ip, args.port, args.queue_length)
     else:
